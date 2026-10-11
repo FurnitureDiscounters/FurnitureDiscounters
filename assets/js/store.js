@@ -1,17 +1,18 @@
 import { getProductPage, getCategories, getSubcategories } from './services/product-service.js';
 import { productCard, setupProductInteractions, escapeHTML as e } from './ui.js';
 const $ = s => document.querySelector(s);
-const grid = $('#product-grid'), search = $('#product-search'), category = $('#category-filter'), sort = $('#sort-products');
+const grid = $('#product-grid'), search = $('#product-search'), sort = $('#sort-products');
 const status = $('#catalog-status'), count = $('#result-count'), clear = $('#clear-filters');
 let subcategories = [];
-const categoryNav=document.createElement('nav');categoryNav.className='collection-strip store-category-strip';categoryNav.setAttribute('aria-label','Categories');categoryNav.tabIndex=0;grid.before(categoryNav);
-const subnav = document.createElement('nav'); subnav.className = 'category-chips collection-strip'; subnav.setAttribute('aria-label', 'Subcategories');subnav.tabIndex=0; grid.before(subnav);
+const categoryNav=document.createElement('nav');categoryNav.className='collection-strip store-category-strip';categoryNav.setAttribute('aria-label','Categories');grid.before(categoryNav);
+const subnav = document.createElement('nav'); subnav.className = 'category-chips collection-strip'; subnav.setAttribute('aria-label', 'Subcategories'); grid.before(subnav);
+let selectedCategory = 'all';
 let selectedSubcategory = new URLSearchParams(location.search).get('subcategory') || 'all';
 let categories = [], pages = [], pageIndex = 0, generation = 0, debounce;
 const pagination = document.createElement('div'); pagination.className = 'catalog-pagination';
 pagination.innerHTML = '<button id="previous-page" class="button button-secondary" type="button">Previous</button><span id="page-number" aria-live="polite"></span><button id="next-page" class="button button-secondary" type="button">Next</button>';
 grid.after(pagination);
-function filters() { return { category: category.value || 'all', search: search.value, sort: sort.value, subcategory: selectedSubcategory }; }
+function filters() { return { category: selectedCategory, search: search.value, sort: sort.value, subcategory: selectedSubcategory }; }
 function render() {
   const page = pages[pageIndex];
   grid.innerHTML = page.products.length ? page.products.map(productCard).join('') : '<div class="catalog-empty"><h2>No furniture found.</h2><p>Try another category or a product name, SKU or material.</p></div>';
@@ -36,8 +37,13 @@ async function load(reset = true) {
   const availableSubs = subcategories.filter(s => s.category === values.category);
   if (!availableSubs.some(s => s.id === selectedSubcategory)) selectedSubcategory = 'all';
   values.subcategory = selectedSubcategory;
+  const focusedCategory = document.activeElement?.dataset.storeCategory;
+  const focusedSubcategory = document.activeElement?.dataset.subcategory;
   categoryNav.innerHTML='<button type="button" data-store-category="all" aria-current="'+(values.category==='all')+'">All furniture</button>'+categories.map(c=>`<button type="button" data-store-category="${e(c.id)}" aria-current="${values.category===c.id}">${c.image?`<img src="${e(c.image)}" alt="" width="120" height="90" loading="lazy">`:'<span class="collection-placeholder" aria-hidden="true">◇</span>'}<span>${e(c.name)}</span></button>`).join('');
   subnav.innerHTML = availableSubs.length ? '<button type="button" data-subcategory="all" aria-current="'+(selectedSubcategory === 'all')+'">All pieces</button>' + availableSubs.map(s=>`<button type="button" data-subcategory="${e(s.id)}" aria-current="${s.id===selectedSubcategory}">${s.image?`<img src="${e(s.image)}" alt="" width="120" height="90" loading="lazy">`:'<span class="collection-placeholder" aria-hidden="true">◇</span>'}<span>${e(s.name)}</span></button>`).join('') : '';
+  subnav.hidden = !availableSubs.length;
+  if (focusedCategory) categoryNav.querySelector(`[data-store-category="${CSS.escape(focusedCategory)}"]`)?.focus({ preventScroll: true });
+  if (focusedSubcategory) subnav.querySelector(`[data-subcategory="${CSS.escape(focusedSubcategory)}"]`)?.focus({ preventScroll: true });
 
   $('h1').innerHTML = selected ? e(selected.name) : 'Find your kind of <em>home.</em>';
   $('.intro-row p').textContent = selected?.description || 'Discover furniture for all the living in between.';
@@ -62,11 +68,11 @@ async function load(reset = true) {
     $('#retry-catalog').addEventListener('click', () => void load(true));
   } finally { if (seq === generation) grid.setAttribute('aria-busy', 'false'); }
 }
-function reset() { clearTimeout(debounce); search.value = ''; selectedSubcategory = 'all'; category.value = 'all'; sort.value = 'featured'; void load(); }
+function reset() { clearTimeout(debounce); search.value = ''; selectedSubcategory = 'all'; selectedCategory = 'all'; sort.value = 'featured'; void load(); }
 search.placeholder = 'Search name, SKU or material…'; search.maxLength = 160;
 search.addEventListener('input', () => { clearTimeout(debounce); generation++; debounce = setTimeout(() => void load(), 500); });
-for (const input of [category, sort]) input.addEventListener('change', () => { clearTimeout(debounce); void load(); });
-categoryNav.addEventListener('click',event=>{const button=event.target.closest('[data-store-category]');if(button){category.value=button.dataset.storeCategory;selectedSubcategory='all';void load();}});
+sort.addEventListener('change', () => { clearTimeout(debounce); void load(); });
+categoryNav.addEventListener('click',event=>{const button=event.target.closest('[data-store-category]');if(button){clearTimeout(debounce);selectedCategory=button.dataset.storeCategory;selectedSubcategory='all';void load();}});
 subnav.addEventListener('click', event => { const button=event.target.closest('[data-subcategory]'); if(button){selectedSubcategory=button.dataset.subcategory; void load();} });
 clear.addEventListener('click', reset);
 $('#previous-page').addEventListener('click', () => { if (pageIndex > 0) { pageIndex--; render(); grid.scrollIntoView({ block: 'start' }); } });
@@ -77,10 +83,10 @@ let collectionsGeneration=0;
 async function refreshCollections(initial=false){
   const version=++collectionsGeneration;
   try{
-    const selected=initial?new URLSearchParams(location.search).get('category'):category.value;
+    const selected=initial?new URLSearchParams(location.search).get('category'):selectedCategory;
     const rows=await Promise.all([getCategories(),getSubcategories()]);if(version!==collectionsGeneration)return;
-    [categories,subcategories]=rows;category.innerHTML='<option value="all">All furniture</option>'+categories.map(c=>`<option value="${e(c.id)}">${e(c.name)}</option>`).join('');
-    category.value=categories.some(c=>c.id===selected)?selected:'all';
+    [categories,subcategories]=rows;
+    selectedCategory=categories.some(c=>c.id===selected)?selected:'all';
     if(initial){const params=new URLSearchParams(location.search);search.value=(params.get('search')||'').slice(0,160);sort.value=['featured','price-asc','price-desc','name'].includes(params.get('sort'))?params.get('sort'):'featured';}
     await load();
   }catch(error){if(version!==collectionsGeneration)return;status.hidden=false;status.textContent=error.message;count.textContent='Collection unavailable';pagination.hidden=true;const retry=document.createElement('button');retry.type='button';retry.className='button button-secondary';retry.textContent='Try again';retry.addEventListener('click',()=>void refreshCollections());status.append(retry);}

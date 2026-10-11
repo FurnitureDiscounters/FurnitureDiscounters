@@ -20,9 +20,3 @@ async function loadHome() {
 setupProductInteractions();
 void loadHome();
 window.addEventListener('catalog-updated',()=>void loadHome());
-
-const categoryRow=document.querySelector('#home-categories'),previous=document.querySelector('#home-categories-previous'),next=document.querySelector('#home-categories-next');
-function scrollControls(){previous.disabled=categoryRow.scrollLeft<=1;next.disabled=categoryRow.scrollLeft+categoryRow.clientWidth>=categoryRow.scrollWidth-1;}
-previous.addEventListener('click',()=>categoryRow.scrollBy({left:-categoryRow.clientWidth*.8,behavior:'smooth'}));
-next.addEventListener('click',()=>categoryRow.scrollBy({left:categoryRow.clientWidth*.8,behavior:'smooth'}));
-categoryRow.addEventListener('scroll',scrollControls,{passive:true});new ResizeObserver(scrollControls).observe(categoryRow);new MutationObserver(scrollControls).observe(categoryRow,{childList:true});scrollControls();
