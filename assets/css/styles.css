@@ -2844,13 +2844,26 @@ body[data-page="editor"] .photo-editor img { max-height:160px; max-width:200px; 
 #inquiry-products { max-width: 560px; margin: 24px auto; text-align: left; }
 #created-order-number { display: block; font-size: 2rem; letter-spacing: .12em; }
 
-/* Homepage collections wrap; catalog and editor collection rows scroll. */
+/* Collection rows scroll horizontally; storefront scrollbars stay hidden. */
 #home-categories {
   display: grid;
-  grid-template-columns: repeat(var(--category-count, 3), minmax(0, 1fr));
-  gap: 28px 20px;
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: calc((100% - (var(--category-count, 3) - 1) * 20px) / var(--category-count, 3));
+  gap: 20px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  padding: 8px;
 }
-#home-categories .category-card { min-width: 0; }
+#home-categories::-webkit-scrollbar {
+  display: none;
+}
+#home-categories .category-card {
+  min-width: 0;
+  scroll-snap-align: start;
+}
 #home-categories .category-image {
   aspect-ratio: 4 / 3;
   border-radius: clamp(32px, 8vw, 90px) clamp(32px, 8vw, 90px) 6px 6px;
@@ -2898,10 +2911,10 @@ body[data-page="editor"] .photo-editor img { max-height:160px; max-width:200px; 
 .catalog-section .collection-placeholder { width: 100%; }
 .catalog-section .category-chips button[aria-current="true"] .collection-placeholder { color: inherit; }
 @media (max-width: 850px) {
-  #home-categories { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #home-categories { grid-auto-columns: calc((100% - 20px) / 2); }
 }
 @media (max-width: 600px) {
-  #home-categories { gap: 24px 14px; }
+  #home-categories { gap: 14px; grid-auto-columns: calc((100% - 14px) / 2); }
   #home-categories .category-card > span { font-size: 12px; margin-top: 10px; }
   body[data-page="home"] .section-heading h2 { font-size: clamp(30px, 8vw, 38px); }
   .cart-heading { flex-wrap: wrap; gap: 12px; }
