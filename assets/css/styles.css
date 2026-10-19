@@ -1645,14 +1645,16 @@ input::placeholder {
   font-weight: 500;
   margin-bottom: 23px;
 }
-.footer-main > div > a:not(.brand) {
+.footer-main > div > a:not(.brand),
+.footer-main [data-category-links] > a {
   font-size: 11px;
   display: block;
   line-height: 1.5;
   margin: 13px 0;
   color: var(--muted);
 }
-.footer-main > div > a:hover {
+.footer-main > div > a:hover,
+.footer-main [data-category-links] > a:hover {
   color: var(--brown);
 }
 .footer-contact p {
