@@ -8,7 +8,7 @@
     "emulators": "firebase emulators:start --project demo-furniture-discounters",
     "test": "npm run test:model && firebase emulators:exec --project demo-furniture-discounters --only firestore 'node --test tests/rules.test.mjs'",
     "build:editor": "node scripts/build-local-editor.mjs",
-    "test:model": "node --test tests/catalog.test.mjs"
+    "test:model": "node --test tests/catalog.test.mjs tests/catalog-publisher.test.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.2",

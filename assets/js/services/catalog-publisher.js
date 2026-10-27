@@ -27,37 +27,62 @@ async function optimizedPhoto(blob) {
   const bitmap=await createImageBitmap(blob),canvas=document.createElement('canvas');
   try {for(const [maximum,quality] of [[1200,.8],[1000,.65],[700,.55]]){const scale=Math.min(1,maximum/Math.max(bitmap.width,bitmap.height));canvas.width=Math.round(bitmap.width*scale);canvas.height=Math.round(bitmap.height*scale);canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);const encoded=await new Promise(resolve=>canvas.toBlob(resolve,'image/webp',quality));if(encoded&&encoded.type==='image/webp'&&encoded.size<=650000)return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(encoded);});}throw new Error('A photo is too large for the free Firebase setup. Use a smaller photo.');}finally{bitmap.close();}
 }
-export async function publishCatalog(database,readPhoto,onProgress=()=>{},expectedRevision=undefined) {
+export async function publishCatalog(database,readPhoto,onProgress=()=>{},expectedRevision=undefined,{productsOnly=false}={}) {
   if(publishing)throw new Error('A publication is already running.');
-  if(publisherAuth().currentUser){await reload(publisherAuth().currentUser);await publisherAuth().currentUser.getIdToken(true);}
-  if(!isOwner(publisherAuth().currentUser))throw new Error('Sign in and verify your store email before publishing.');
   publishing=true;
   try {
-    const db=catalogDatabase(),current=doc(db,'catalog','current'),previous=await getDoc(current),previousEditor=await getDoc(doc(db,'editor','current')),base=previous.exists()?previous.data().revision:null;
+    if(publisherAuth().currentUser){await reload(publisherAuth().currentUser);await publisherAuth().currentUser.getIdToken(true);}
+    if(!isOwner(publisherAuth().currentUser))throw new Error('Sign in and verify your store email before publishing.');
+    const db=catalogDatabase(),current=doc(db,'catalog','current'),previous=await getDoc(current),previousEditor=productsOnly?null:await getDoc(doc(db,'editor','current')),base=previous.exists()?previous.data().revision:null;
     if(base!==null&&expectedRevision===undefined)throw new Error('Firebase already contains a catalog. Load from Firebase before publishing. Back up local drafts first.');
     if(expectedRevision!==undefined&&expectedRevision!==base)throw new Error('The online catalog changed. Load from Firebase before publishing to avoid overwriting another update.');
-    const deletionDocs=await getDocs(query(collection(db,'orders'),where('revision','==','deleted-orders'))),deleted=new Set(deletionDocs.docs.map(d=>d.id));
-    const orderKeys=await Promise.all(database.orders.map(async o=>({order:o,key:'deleted_'+await orderDeletionKey(o)})));
+    let orderKeys=[],deleted=new Set();
+    if(productsOnly)database={...database,orders:[]};
+    else {
+    const deletionDocs=await getDocs(query(collection(db,'orders'),where('revision','==','deleted-orders')));deleted=new Set(deletionDocs.docs.map(d=>d.id));
+    orderKeys=await Promise.all(database.orders.map(async o=>({order:o,key:'deleted_'+await orderDeletionKey(o)})));
     database={...database,orders:orderKeys.filter(v=>!deleted.has(v.key)).map(v=>v.order)};
+    }
     const catalog=publicCatalog(database),paths=new Set([...database.products.flatMap(p=>p.images),...database.categories.map(c=>c.imagePath).filter(Boolean),...database.subcategories.map(s=>s.imagePath).filter(Boolean)]);
     let n=0;
     for(const path of paths){onProgress(`Uploading photos ${++n} of ${paths.size}…`);if(!path.startsWith('assets/products/'))continue;const ref=doc(db,'catalogPhotos',await photoKey(path)),existing=await getDoc(ref);if(existing.exists())continue;const blob=await readPhoto(path);if(!blob)throw new Error(`Missing photo: ${path}. Open your photo backup before publishing.`);await setDoc(ref,{data:await optimizedPhoto(blob)});}
     const json=asciiJSON(catalog),chunks=[];for(let i=0;i<json.length;i+=150000)chunks.push(json.slice(i,i+150000));
     if(chunks.length>100)throw new Error('This catalog is too large to publish.');
     const revision=crypto.randomUUID();
-    const privateJson=asciiJSON({...database,orders:[]}),privateChunks=[];for(let i=0;i<privateJson.length;i+=150000)privateChunks.push(privateJson.slice(i,i+150000));if(privateChunks.length>100)throw new Error('The private catalog is too large to publish.');
+    const privateJson=asciiJSON({...database,orders:[]}),privateChunks=[];for(let i=0;i<privateJson.length;i+=150000)privateChunks.push(privateJson.slice(i,i+150000));if(privateChunks.length>(productsOnly?99:100))throw new Error('The private catalog is too large to publish.');
     for(let i=0;i<privateChunks.length;i++)await setDoc(doc(db,'editorVersions',revision,'parts',String(i)),{json:privateChunks[i]});
+    // Part 99 is metadata only for catalog-only revisions; editor/current keeps owning orders.
+    if(productsOnly)await setDoc(doc(db,'editorVersions',revision,'parts','99'),{json:JSON.stringify({kind:'catalog-only',parts:privateChunks.length})});
     for(const order of database.orders)await setDoc(doc(db,'orders',revision+'_'+order.id),{json:JSON.stringify(order),revision,updatedAt:serverTimestamp()});
     for(let i=0;i<chunks.length;i++){onProgress(`Uploading catalog ${i+1} of ${chunks.length}…`);await setDoc(doc(db,'catalogVersions',revision,'parts',String(i)),{json:chunks[i]});}
-    await runTransaction(db,async tx=>{const latest=await tx.get(current),value=latest.exists()?latest.data().revision:null;if(value!==base)throw new Error('Another editor published while you were uploading. Load from Firebase before retrying.');for(const item of orderKeys.filter(v=>!deleted.has(v.key))){if((await tx.get(doc(db,'orders',item.key))).exists())throw new Error('An order was deleted while publishing. Retry to keep it deleted.');}tx.set(current,{revision,parts:chunks.length,updatedAt:serverTimestamp()});tx.set(doc(db,'editor','current'),{revision,parts:privateChunks.length,updatedAt:serverTimestamp()});});
+    await runTransaction(db,async tx=>{const latest=await tx.get(current),value=latest.exists()?latest.data().revision:null;if(value!==base)throw new Error('Another editor published while you were uploading. Load from Firebase before retrying.');for(const item of orderKeys.filter(v=>!deleted.has(v.key))){if((await tx.get(doc(db,'orders',item.key))).exists())throw new Error('An order was deleted while publishing. Retry to keep it deleted.');}tx.set(current,{revision,parts:chunks.length,updatedAt:serverTimestamp()});if(!productsOnly)tx.set(doc(db,'editor','current'),{revision,parts:privateChunks.length,updatedAt:serverTimestamp()});});
     // Retire old chunks after the new pointer is live; failed cleanup never reverses publication.
     let cleanupNeeded=false;
-    if(previous.exists()){try{const {deleteDoc}=await import('firebase/firestore/lite');for(let i=0;i<previous.data().parts;i++)await deleteDoc(doc(db,'catalogVersions',base,'parts',String(i)));if(previousEditor.exists()){const old=previousEditor.data();for(let i=0;i<old.parts;i++)await deleteDoc(doc(db,'editorVersions',old.revision,'parts',String(i)));const oldOrders=await getDocs(query(collection(db,'orders'),where('revision','==',old.revision)));for(const order of oldOrders.docs)await deleteDoc(order.ref);}}catch{cleanupNeeded=true;}}
-    return {revision,products:catalog.products.length,orders:database.orders.length,collectionPhotos:[...catalog.categories,...catalog.subcategories].filter(c=>c.imagePath).length,cleanupNeeded};
+    if(previous.exists()){try{const {deleteDoc}=await import('firebase/firestore/lite');for(let i=0;i<previous.data().parts;i++)await deleteDoc(doc(db,'catalogVersions',base,'parts',String(i)));if(previousEditor?.exists()){const old=previousEditor.data();for(let i=0;i<old.parts;i++)await deleteDoc(doc(db,'editorVersions',old.revision,'parts',String(i)));const oldOrders=await getDocs(query(collection(db,'orders'),where('revision','==',old.revision)));for(const order of oldOrders.docs)await deleteDoc(order.ref);}}catch{cleanupNeeded=true;}}
+    return {revision,productsOnly,products:catalog.products.length,orders:database.orders.length,collectionPhotos:[...catalog.categories,...catalog.subcategories].filter(c=>c.imagePath).length,cleanupNeeded};
   }finally{publishing=false;}
 }
 export async function verifyPublisherEmail(){const user=publisherAuth().currentUser;if(!user)throw new Error('Sign in first.');await sendEmailVerification(user);}
-export async function loadEditorCatalog(){const db=catalogDatabase(),saved=await getDoc(doc(db,'editor','current'));if(!saved.exists())throw new Error('No editor database has been published to Firebase yet.');const {revision,parts}=saved.data();if(!/^[A-Za-z0-9_-]{1,80}$/.test(revision)||!Number.isInteger(parts)||parts<1||parts>100)throw new Error('Invalid cloud database metadata.');const docs=await Promise.all(Array.from({length:parts},(_,i)=>getDoc(doc(db,'editorVersions',revision,'parts',String(i)))));if(docs.some(d=>!d.exists()))throw new Error('The cloud editor database is incomplete.');const database=JSON.parse(docs.map(d=>d.data().json).join(''));const orders=await getDocs(query(collection(db,'orders'),where('revision','==',revision)));database.orders=orders.docs.map(d=>JSON.parse(d.data().json));const inquiries=await getDocs(collection(db,'pickupRequests'));const numbers=new Set(database.orders.map(o=>`${o.week||''}:${o.number}`));for(const d of inquiries.docs){const o=decodePublicOrder(d.data());if(!numbers.has(`${o.week||''}:${o.number}`))database.orders.push({id:d.id,number:o.number,week:o.week||'',lookupKey:o.lookupKey||'',name:'',email:'',phone:'',notes:'Website inquiry; confirm prices and pickup with the customer.',createdAt:o.createdAt.toDate().toISOString(),items:o.items});}return {database,revision};}
+export async function loadEditorCatalog(){
+  const db=catalogDatabase(),current=await getDoc(doc(db,'catalog','current')),saved=await getDoc(doc(db,'editor','current'));
+  if(!current.exists())throw new Error('No editor database has been published to Firebase yet.');
+  const revision=current.data().revision,orderRevision=saved.exists()?saved.data().revision:null;
+  let parts;
+  if(revision===orderRevision)parts=saved.data().parts;
+  else {
+    const metadata=await getDoc(doc(db,'editorVersions',revision,'parts','99'));
+    if(!metadata.exists())throw new Error('The cloud editor database is incomplete.');
+    const info=JSON.parse(metadata.data().json);
+    if(info.kind!=='catalog-only'||!Number.isInteger(info.parts)||info.parts<1||info.parts>99)throw new Error('Invalid cloud database metadata.');
+    parts=info.parts;
+  }
+  if(!/^[A-Za-z0-9_-]{1,80}$/.test(revision)||!Number.isInteger(parts)||parts<1||parts>100)throw new Error('Invalid cloud database metadata.');
+  const docs=await Promise.all(Array.from({length:parts},(_,i)=>getDoc(doc(db,'editorVersions',revision,'parts',String(i)))));
+  if(docs.some(d=>!d.exists()))throw new Error('The cloud editor database is incomplete.');
+  const database=JSON.parse(docs.map(d=>d.data().json).join(''));
+  const orders=orderRevision?await getDocs(query(collection(db,'orders'),where('revision','==',orderRevision))):{docs:[]};
+  database.orders=orders.docs.map(d=>JSON.parse(d.data().json));
+  const inquiries=await getDocs(collection(db,'pickupRequests'));const numbers=new Set(database.orders.map(o=>`${o.week||''}:${o.number}`));for(const d of inquiries.docs){const o=decodePublicOrder(d.data());if(!numbers.has(`${o.week||''}:${o.number}`))database.orders.push({id:d.id,number:o.number,week:o.week||'',lookupKey:o.lookupKey||'',name:'',email:'',phone:'',notes:'Website inquiry; confirm prices and pickup with the customer.',createdAt:o.createdAt.toDate().toISOString(),items:o.items});}const latest=await getDoc(doc(db,'catalog','current'));if(!latest.exists()||latest.data().revision!==revision)throw new Error('The online catalog changed while loading. Load from Firebase again.');return {database,revision};}
 export { readFirebaseCatalog };
 
 let liveDatabase;
